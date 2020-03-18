@@ -4,6 +4,10 @@
 #include <fstream>
 #include <cmath>
 #include <cstdlib>
+#include <fcntl.h>
+#include<string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 using namespace std;
 
 struct Data {
@@ -51,7 +55,7 @@ private:
     const double wtInitV = 1.0;
     const double stepSize = 0.1;
     const int maxIterTimes = 10;
-    const double predictTrueThresh = 0.5;
+    const double predictTrueThresh = 0.6;
     const int train_show_step = 10;
 };
 
@@ -64,45 +68,73 @@ LR::LR(string trainF, string testF, string predictOutF)
     init();
 }
 
+inline Data ParseTrainDataItem(char *str) {
+   vector<double> v;
+
+   char *begin = str, *end;
+   errno       = 0;
+   double tmp  = strtod(begin, &end);
+
+   while (errno == 0 && end != begin) {
+       v.push_back(tmp);
+       if (*end == '\n')
+           break;
+       begin = end + 1;
+       tmp   = strtod(begin, &end);
+   }
+   // error occured.
+   if (v.size() == 0)
+       return Data(v, -1);
+
+   int ftf = (int)v.back();
+   v.pop_back();
+   return Data(v, ftf);
+}
+inline void handleError(const char *msg) {
+   perror(msg);
+   exit(255);
+}
+// Memory Mapping
+///////////////////////////////////////////////////////////////////////////////
+char *mapFile(const char *fname, size_t &length) {
+   int fd = open(fname, O_RDONLY);
+   if (fd == -1)
+       handleError("open");
+
+   // obtain file size
+   struct stat sb;
+   if (fstat(fd, &sb) == -1)
+       handleError("fstat");
+
+   length = sb.st_size;
+
+   char *addr = static_cast<char *>(mmap(NULL, length, PROT_READ, MAP_PRIVATE, fd, 0u));
+   if (addr == MAP_FAILED)
+       handleError("mmap");
+
+   // TODO close fd at some point in time, call munmap(...)
+   return addr;
+}
 bool LR::loadTrainData()
 {
-    ifstream infile(trainFile.c_str());
-    string line;
+    size_t length;
+    char * f     = mapFile(trainFile.c_str(), length);
+    char * l     = f + length;
 
-    if (!infile) {
-        cout << "打开训练文件失败" << endl;
-        exit(0);
-    }
-    
-    while (infile) {
-        getline(infile, line);
-        if (line.size() > featuresNum) {
-            stringstream sin(line);
-            char ch;
-            double dataV;
-            int i;
-            vector<double> feature;
-            i = 0;
-    
-            while (sin) {
-                char c = sin.peek();
-                if (int(c) != -1) {
-                    sin >> dataV;
-                    feature.push_back(dataV);
-                    sin >> ch;
-                    i++;
-                } else {
-                    cout << "训练文件数据格式不正确，出错行为" << (trainDataSet.size() + 1) << "行" << endl;
-                    return false;
-                }
-            }
-            int ftf;
-            ftf = (int)feature.back();
-            feature.pop_back();
-            trainDataSet.push_back(Data(feature, ftf));
+    // the first line.
+    auto parseResult = ParseTrainDataItem(f);
+    if (parseResult.label != -1)
+        trainDataSet.push_back(parseResult);
+
+    while (f && f != l) {
+        if ((f = static_cast<char *>(memchr(f, '\n', l - f)))) {
+            parseResult = ParseTrainDataItem(f);
+            if (parseResult.label != -1)
+                trainDataSet.push_back(parseResult);
+            f++;
         }
     }
-    infile.close();
+    munmap(f, length);
     return true;
 }
 
@@ -188,8 +220,6 @@ void LR::train()
     int i, j;
     vector <int> data_index;
     int count=0;
-//    #define CacheLineSize 64
-//    int items = CacheLineSize / sizeof(float);
     for (i = 0; i < maxIterTimes; i++) {
         for(int l=0;l<trainDataSet.size();l ++ )
              data_index.push_back(l);
@@ -211,17 +241,6 @@ void LR::train()
             data_index.pop_back();
         }
         
-//        double loss=lossCal();
-//        cout<<loss<<endl;
-//        if(loss<0.7){
-//            count++;
-//        }else{
-//            count=0;
-//        }
-//        if(count>=20){
-//            cout<<i;
-//            break;
-//        }
     }
 }
 
@@ -379,7 +398,7 @@ int main(int argc, char *argv[])
     string testFile = "/data/test_data.txt";
     string predictFile = "/projects/student/result.txt";
 
-    string answerFile = "/Users/pluto/huawei/code1/hu/hu/projects/student/answer.txt";
+    string answerFile = "/projects/student/answer.txt";
     
     LR logist(trainFile, testFile, predictFile);
     
